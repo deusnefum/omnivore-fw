@@ -53,8 +53,11 @@ type DShot struct {
 	bits bits
 }
 
+// Frame defines a dshot frame
 type Frame struct {
-	Throttle  uint16
+	// Throttle is the throttle value or command to send to the ESC
+	Throttle uint16
+	// Telemetry determine whether or not to set the telemetry bit (I don't know what that does)
 	Telemetry bool
 	crc       byte
 }
@@ -99,6 +102,8 @@ func NewDShot(speed uint) *DShot {
 	return ds
 }
 
+// SendFrame taks a Frame and pre-configured machine.Pin and transmits
+// the frame on the pin (bit-bang)
 func (ds *DShot) SendFrame(dsf *Frame, pin machine.Pin) {
 	// Send MSB first
 	data := dsf.encode()
@@ -114,6 +119,7 @@ func (ds *DShot) SendFrame(dsf *Frame, pin machine.Pin) {
 	// go high here again??
 }
 
+// InitPin initializes a machine.Pin for communicating with an ESC
 func InitPin(pin machine.Pin) {
 	pin.Configure(machine.PinConfig{Mode: machine.PinOutput})
 }
@@ -126,10 +132,10 @@ func (df *Frame) encode() (frame uint16) {
 
 	// calc checksum
 	var csum uint16
-	csum_data := frame
+	csumData := frame
 	for i := 0; i < 3; i++ { // tinygo is smart enough to unroll this, right?
-		csum ^= csum_data // xor data by nibbles
-		csum_data >>= 4
+		csum ^= csumData // xor data by nibbles
+		csumData >>= 4
 	}
 	csum &= 0xf
 	// append checksum
