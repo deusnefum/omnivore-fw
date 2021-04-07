@@ -110,6 +110,8 @@ func (ds *DShot) SendFrame(dsf *Frame, pin machine.Pin) {
 		time.Sleep(ds.bits[bMasked][1])
 		data <<= 1
 	}
+	time.Sleep(time.Duration(20) * time.Microseconds)
+	// go high here again??
 }
 
 func InitPin(pin machine.Pin) {
@@ -131,7 +133,7 @@ func (df *Frame) encode() (frame uint16) {
 	}
 	csum &= 0xf
 	// append checksum
-	frame = (frame << 4) | csuam
+	frame = (frame << 4) | csum
 
 	return
 }

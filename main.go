@@ -34,7 +34,7 @@ func main() {
 	dshot.InitPin(ESC3)
 	dshot.InitPin(ESC4)
 
-	// initalize dshot600
+	// initialize dshot600
 	ds := dshot.NewDShot(600)
 
 	// start and arm ESCs
