@@ -22,11 +22,15 @@ func New(pin machine.Pin) *PPM {
 func (p *PPM) Start() {
 	p.pin.SetInterrupt(machine.PinRising, func(pin machine.Pin) {
 		t := time.Now()
-		timeDiff := time.Since(p.lastChange)
-		defer func() { p.lastChange = t }()
+		timeDiff := t.Sub(p.lastChange)
+		p.lastChange = t
 		if timeDiff > time.Duration(3*time.Millisecond) {
 			// start of PPM frame
 			p.currentChannel = 0
+			return
+		}
+
+		if p.currentChannel > len(p.Channels) {
 			return
 		}
 
@@ -34,4 +38,8 @@ func (p *PPM) Start() {
 		p.currentChannel++
 	})
 
+}
+
+func (p *PPM) Stop() {
+	p.pin.SetInterrupt(0, nil)
 }
