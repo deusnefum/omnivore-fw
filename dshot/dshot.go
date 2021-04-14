@@ -42,6 +42,8 @@ const (
 	queueSize = 10
 )
 
+// DShot defines the use of the dshot protocol, mostly this is for tracking
+// what protocol speed to use.
 type DShot struct {
 	speed uint
 
@@ -107,15 +109,14 @@ func NewDShot(speed uint) *DShot {
 func (ds *DShot) SendFrame(dsf *Frame, pin machine.Pin) {
 	// Send MSB first
 	data := dsf.encode()
-	for i := 0; i < 16; i++ {
-		bMasked := data & 0x8000
+	for i := 15; i >= 0; i-- {
+		bMasked := (data >> i) & 1
 		pin.High()
 		time.Sleep(ds.bits[bMasked][0])
 		pin.Low()
 		time.Sleep(ds.bits[bMasked][1])
-		data <<= 1
 	}
-	time.Sleep(time.Duration(20) * time.Microseconds)
+	time.Sleep(time.Duration(20) * time.Microsecond)
 	// go high here again??
 }
 
