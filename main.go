@@ -40,7 +40,7 @@ func main() {
 	time.Sleep(time.Duration(2 * time.Second))
 
 	// Setup weapon sensor to use interrupt
-	WeaponSensor.Configure(machine.PinConfig{Mode: machine.PinInput})
+	WeaponSensor.Configure(machine.PinConfig{Mode: machine.PinInputPullup})
 
 	// setup weapon firing pin
 	Weapon.Configure(machine.PinConfig{Mode: machine.PinOutput})
@@ -55,23 +55,29 @@ func main() {
 	// instantiate lis2mdl
 	compass := lis2mdl.New(machine.I2C0)
 	compass.Configure(lis2mdl.Configuration{})
-	if !compass.Connected() {
+	for !compass.Connected() {
 		log("Not connected to compass!")
 	}
 
-	var prevHeading float64
+	// var prevHeading float64
 	for {
-		heading := float64(compass.ReadCompass())
-		if heading > 180 {
-			heading -= 360
-		}
 
-		prevHeading = (prevHeading*9 + heading) / 10
-		print(fmt.Sprintf("%10d %+3.0f %+3.0f"))
-		for _, v := range RCPPM.Channels {
-			print(fmt.Sprintf("%+1.2f ", v))
-		}
-		print("\r")
+		// heading := float64(compass.ReadCompass())
+		// if heading > 180 {
+		// heading -= 360
+		// }
+		//
+		// prevHeading = (prevHeading*9 + heading) / 10
+		// print(fmt.Sprintf("%10d %+3.0f %+3.0f\r", time.Now().Unix(), heading, math.Round(prevHeading)))
+
+		// for i := 0; i < 8; i++ {
+		// print(fmt.Sprintf("CH%d: %+1.2f ", i+1, RCPPM.Channels[i]))
+		// }
+		// print("\n")
+		m := sineDrive(RCPPM.Channel(0), RCPPM.Channel(1), 0)
+		print(fmt.Sprintf("M0:%+1.3f M1:%+1.3f M2:%+1.3f M3:%+1.3f\r", m[0], m[1], m[2], m[3]))
+
+		//println(fmt.Sprintf("%+1.3f, %+1.3f", RCPPM.Channel(0), RCPPM.Channel(1))
 
 		time.Sleep(time.Duration(500 * time.Millisecond))
 	}
@@ -126,12 +132,26 @@ func sineDrive(x, y, rotation float64) (out [4]float64) {
 	// The desired angle of movement
 	dTheta := math.Atan2(y, x)
 	// magnitude of movement
-	dV := math.Sqrt(y*y + x*x)
+	dV := math.Sqrt(y*y+x*x) / 0.7
+
+	if dV > 1 {
+		dV = 1
+	}
+
+	//print(fmt.Sprintf("dV: %+1.3f dTheta: %+1.3f\r", dV, dTheta))
+
+	if (x == 0 && y == 0) || (dV+rotation) == 0 {
+		return [4]float64{0, 0, 0, 0}
+	}
 
 	motorPositions := [4]float64{math.Pi * 3 / 4, math.Pi / 4, math.Pi * 7 / 4, math.Pi * 5 / 4}
 
+	pV := dV + math.Abs(rotation)
+	rotation = rotation * rotation / pV
+	dV = dV * dV / pV
+
 	for i, offset := range motorPositions {
-		out[i] = dV/(dV+math.Abs(rotation))*-math.Sin(dTheta-offset) + rotation/(dV+math.Abs(rotation))
+		out[i] = dV*-math.Sin(dTheta-offset) + rotation
 	}
 
 	return
