@@ -18,7 +18,7 @@ func New(pin machine.Pin) *PPM {
 	pin.Configure(machine.PinConfig{Mode: machine.PinInputPulldown})
 	return &PPM{
 		pin:               pin,
-		DeadZoneThreshold: 0.15,
+		DeadZoneThreshold: 0.12,
 	}
 }
 
@@ -50,7 +50,12 @@ func (p *PPM) Start() {
 }
 
 func (p *PPM) Channel(ch int) float64 {
-	if math.Abs(p.Channels[ch]) < p.DeadZoneThreshold {
+	switch {
+	case math.Abs(p.Channels[ch]) < p.DeadZoneThreshold:
+		return 0
+	case p.Channels[ch] < -1.0:
+		return -1
+	case p.Channels[ch] > 1.0:
 		return 0
 	}
 	return p.Channels[ch]
