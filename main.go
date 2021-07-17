@@ -14,23 +14,24 @@ import (
 
 // Pinsssss
 const (
-	ESC1 = machine.D2
-	ESC2 = machine.D3
-	ESC3 = machine.D4
-	ESC4 = machine.D5
+	ESC1 = machine.D13
+	ESC2 = machine.D12
+	ESC3 = machine.D11
+	ESC4 = machine.D10
 
 	WeaponSensor = machine.D12
 	Weapon       = machine.D7
 
 	PressureSensorPin = machine.A0
 
-	RC = machine.D10
+	RC = machine.D9
 
 	// what each RC channel is for
 	weaponModeChannel = 4
 	weaponFireChannel = 5
 	xAxisChannel      = 0
 	yAxisChannel      = 1
+	rotAxisChannel    = 3
 	driveModeChannel  = 6
 )
 
@@ -42,19 +43,21 @@ var (
 )
 
 func log(msg string) {
-	println(fmt.Sprintf("%d %s", time.Now().Unix(), msg))
+	println(fmt.Sprintf("[%d] %s", time.Now().UnixNano(), msg))
 }
 
 func main() {
+	// we boot too fast to catch start up log messages, so sleep a couple seconds
+	// to get the UART0 / usb connection up
+	time.Sleep(time.Duration(2 * time.Second))
+	log("omnivore start")
+
 	// Need ADC to read pressure sensor voltage
 	machine.InitADC()
 	PressureSensorPin.Configure(machine.PinConfig{Mode: machine.PinAnalog})
 	PressureSensor = machine.ADC{PressureSensorPin}
 	PressureSensor.Configure(machine.ADCConfig{})
-
-	// we boot too fast to catch start up log messages, so sleep a couple seconds
-	// to get the UART0 / usb connection up
-	time.Sleep(time.Duration(2 * time.Second))
+	log("ADC configured")
 
 	// Setup weapon sensor to use interrupt
 	WeaponSensor.Configure(machine.PinConfig{Mode: machine.PinInputPullup})
@@ -72,34 +75,30 @@ func main() {
 	// instantiate lis2mdl
 	compass = lis2mdl.New(machine.I2C0)
 	compass.Configure(lis2mdl.Configuration{})
+	log("compass and rc/ppm configured")
 
-	// initialize our ESC outputs
+	// initialize dshot
 	ds := dshot.NewDShot(600)
-	dshot.InitPin(ESC1)
-	dshot.InitPin(ESC2)
-	dshot.InitPin(ESC3)
-	dshot.InitPin(ESC4)
 
-	// initialize dshot600
-	//ds := dshot.NewDShot(600)
-
-	// start and arm ESCs
-	escCmdChan0, _ := ds.Start(ESC1)
-	escCmdChan1, _ := ds.Start(ESC2)
-	escCmdChan2, _ := ds.Start(ESC3)
-	escCmdChan3, _ := ds.Start(ESC4)
-
-	// for {
-	// print(fmt.Sprintf("Heading: %+1.3f\r", heading))
-	// // print(fmt.Sprintf("weaponMode: %+1.3f\r", RCPPM.Channel(weaponModeChannel)))
-	// time.Sleep(time.Duration(100) * time.Millisecond)
-	// }
+	// start dshot channels for ESCs
+	esc := [4]*dshot.Channel{}
+	for i, e := range []machine.Pin{ESC1, ESC2, ESC3, ESC4} {
+		log(fmt.Sprintf("configuring ESC #%d", i))
+		dshot.InitPin(e)
+		log(fmt.Sprintf("initialized pin for ESC #%d", i))
+		esc[i] = ds.NewChannel(e)
+		log(fmt.Sprintf("created Channel for ESC #%d", i))
+		// we want 3d mode so we don't constantly have to send "change direction" commands
+		esc[i].SendCmd(dshot.Cmd3DModeOn, 2)
+		log(fmt.Sprintf("enabled 3D mode for ESC #%d", i))
+		esc[i].SendCmd(dshot.CmdSaveSettings, 2) // not sure if I only need to issue 1 SaveSettings command--leave at 10 for now
+		log(fmt.Sprintf("saved settings for ESC #%d", i))
+	}
+	log("dshot started")
 
 	go updateHeading()
 	go weaponControl()
 
-	f := [4]dshot.Frame{}
-	forward := [4]bool{}
 	for {
 		// var heading float64
 
@@ -119,7 +118,7 @@ func main() {
 			}
 		}
 		// manual rotation control works regardless of auto-drive switch
-		if manualRot := RCPPM.Channel(3); manualRot != 0 {
+		if manualRot := RCPPM.Channel(rotAxisChannel); manualRot != 0 {
 			rotation = manualRot
 		}
 
@@ -128,24 +127,9 @@ func main() {
 		print(fmt.Sprintf("x: %+1.2f y: %+1.2f r: %+1.2f; m0: %+1.2f m1: %+1.2f m2: %+1.2f m3: %+1.2f\r", RCPPM.Channel(0), RCPPM.Channel(1), rotation, m[0], m[1], m[2], m[3]))
 
 		for i := range m {
-			if m[i] >= 0 && !forward[i] {
-				f[i].Throttle = dshot.CmdSpinDirectionNormal
-				forward[i] = true
-				continue
-			}
-			if m[i] < 0 && forward[i] {
-				f[i].Throttle = dshot.CmdSpinDirectionReversed
-				forward[i] = false
-				continue
-			}
-
-			f[i].Throttle = uint16(math.Abs(m[i])*2000 + dshot.CmdMax)
+			esc[i].Set3DThrottle(m[i])
+			//esc[i].Set3DThrottle(0.2)
 		}
-
-		escCmdChan0 <- f[0]
-		escCmdChan1 <- f[1]
-		escCmdChan2 <- f[2]
-		escCmdChan3 <- f[3]
 
 		// dshot600 ESCs can't update faster than ~28 microseconds, so no need to loop faster than that
 		// and if we loop *too* fast we'll end up blocking up the control channels, so slightly slower is better
@@ -222,34 +206,6 @@ func sineDrive(x, y, rotation float64) (out [4]float64) {
 
 	//print(fmt.Sprintf("dV: %+1.3f dTheta: %+1.3f %+v\r", dV, dTheta, out))
 	return
-}
-
-func debug() {
-	var prevHeading float64
-	for {
-		if compass.Connected() {
-			heading := float64(compass.ReadCompass())
-			// if heading > 180 {
-			// heading -= 360
-			// }
-
-			// prevHeading = (prevHeading*9 + heading) / 10
-			prevHeading = heading
-			print(fmt.Sprintf("%10d %+3.0f %+3.0f\n", time.Now().Unix(), heading, math.Round(prevHeading)))
-		}
-
-		// for i := 0; i < 8; i++ {
-		// print(fmt.Sprintf("CH%d: %+1.2f ", i+1, RCPPM.Channels[i]))
-		// }
-		// print("\n")
-
-		m := sineDrive(RCPPM.Channel(0), RCPPM.Channel(1), 0)
-		print(fmt.Sprintf("M0:%+1.3f M1:%+1.3f M2:%+1.3f M3:%+1.3f\n", m[0], m[1], m[2], m[3]))
-
-		//println(fmt.Sprintf("%+1.3f, %+1.3f", RCPPM.Channel(0), RCPPM.Channel(1))
-
-		time.Sleep(time.Duration(1000 * time.Millisecond))
-	}
 }
 
 func getHeading() float64 {
