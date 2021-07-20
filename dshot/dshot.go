@@ -115,6 +115,8 @@ func NewDShot(speed uint) *DShot {
 
 		ds.bits[0][0] = 312
 		ds.bits[0][1] = 521
+	default:
+		panic("incorrect dshot speed used")
 	}
 
 	return ds
@@ -124,6 +126,7 @@ func NewDShot(speed uint) *DShot {
 // the frame on the pin (bit-bang)
 func (ds *DShot) SendFrame(dsf *Frame, pin machine.Pin) {
 	// Send MSB first
+	// Send LSB first?!?!
 	data := dsf.encode()
 	for i := 15; i >= 0; i-- {
 		bMasked := int((data >> i) & 1)
@@ -132,7 +135,7 @@ func (ds *DShot) SendFrame(dsf *Frame, pin machine.Pin) {
 		pin.Low()
 		time.Sleep(ds.bits[bMasked][1])
 	}
-	time.Sleep(time.Duration(20) * time.Microsecond)
+	time.Sleep(time.Duration(50) * time.Microsecond)
 	// leave line low
 }
 
@@ -166,12 +169,15 @@ func (df *Frame) encode() (frame uint16) {
 
 	// calc checksum
 	var csum uint16
-	csumData := frame
-	for i := 0; i < 3; i++ { // tinygo/LLVM is smart enough to unroll this, right?
-		csum ^= csumData // xor data by nibbles
-		csumData >>= 4
-	}
-	csum &= 0x000f
+	/*
+		csumData := frame
+		for i := 0; i < 3; i++ { // tinygo/LLVM is smart enough to unroll this, right?
+			csum ^= csumData // xor data by nibbles
+			csumData >>= 4
+		}
+		csum &= 0x000f
+	*/
+	csum = (frame ^ (frame >> 4) ^ (frame >> 8)) & 0x0F
 
 	// append checksum
 	return (frame << 4) | csum
@@ -185,13 +191,11 @@ func (ds *DShot) NewChannel(pin machine.Pin) *Channel {
 	ch.spinning = false
 
 	go func() {
-		return
 		// lastSend := time.Now()
 		// throttleFrame := Frame{}
 		for {
 			select {
 			case newFrame := <-ch.Cmd:
-				println("I got one!")
 				// if we got a throttle, update throttle
 				/*if newFrame.Throttle > CmdMax {
 					throttleFrame = newFrame
@@ -268,4 +272,10 @@ func (ch *Channel) SendCmd(cmd uint16, repeat int) {
 }
 
 func (ch *Channel) Init() {
+}
+
+func spin(duration time.Duration) {
+	start := time.Now()
+	for time.Since(start) < duration {
+	}
 }

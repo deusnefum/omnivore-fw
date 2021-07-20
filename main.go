@@ -1,7 +1,6 @@
 package main
 
 import (
-	"dshot"
 	"fmt"
 	"machine"
 	"math"
@@ -77,37 +76,27 @@ func main() {
 	compass.Configure(lis2mdl.Configuration{})
 	log("compass and rc/ppm configured")
 
-	// initialize dshot
-	ds := dshot.NewDShot(600)
-
-	// start dshot channels for ESCs
-	esc := [4]*dshot.Channel{}
-	for i, e := range []machine.Pin{ESC1, ESC2, ESC3, ESC4} {
-		log(fmt.Sprintf("configuring ESC #%d", i))
-		dshot.InitPin(e)
-		log(fmt.Sprintf("initialized pin for ESC #%d", i))
-		esc[i] = ds.NewChannel(e)
-		log(fmt.Sprintf("created Channel for ESC #%d", i))
-		// we want 3d mode so we don't constantly have to send "change direction" commands
-		esc[i].SendCmd(dshot.Cmd3DModeOn, 2)
-		log(fmt.Sprintf("enabled 3D mode for ESC #%d", i))
-		esc[i].SendCmd(dshot.CmdSaveSettings, 2) // not sure if I only need to issue 1 SaveSettings command--leave at 10 for now
-		log(fmt.Sprintf("saved settings for ESC #%d", i))
+	// start pwm for motors
+	TCC0 := machine.TCC0
+	var pwmChan [4]uint8
+	for i, pin := range [4]machine.Pin{ESC1, ESC2, ESC3, ESC4} {
+		var err error
+		pwmChan[i], err = TCC0.Channel(pin)
+		if err != nil {
+			log("error configuring pwm channel: " + err.Error())
+		}
+		err = TCC0.Configure(machine.PWMConfig{Period: uint64(20 * time.Millisecond)})
+		if err != nil {
+			log("error configuring TCC0 PWM: " + err.Error())
+		}
+		TCC0.Set(pwmChan[i], TCC0.Top()/13)
 	}
-	log("dshot started")
+	log("pwm/esc started")
 
 	go updateHeading()
 	go weaponControl()
 
 	for {
-		// var heading float64
-
-		// very simplistic heading correction algo
-		// will need to refine this once I have some motors hooked up
-
-		// FAILSAFE:
-		// check RCPPM.Channel(driveModeChannel) and if it's 0 for more than 30 seconds or so, disarm the ESCs
-
 		var rotation float64
 		if RCPPM.Channel(driveModeChannel) > 0.6 && compass.Connected() {
 			// rotation = getHeading() / -180
@@ -126,18 +115,19 @@ func main() {
 
 		print(fmt.Sprintf("x: %+1.2f y: %+1.2f r: %+1.2f; m0: %+1.2f m1: %+1.2f m2: %+1.2f m3: %+1.2f\r", RCPPM.Channel(0), RCPPM.Channel(1), rotation, m[0], m[1], m[2], m[3]))
 
+		// weaponControl()
+
 		for i := range m {
-			esc[i].Set3DThrottle(m[i])
-			//esc[i].Set3DThrottle(0.2)
+			divisor := math.Round(40 / (m[i] + 3))
+			TCC0.Set(pwmChan[i], TCC0.Top()/uint32(divisor))
 		}
 
-		// dshot600 ESCs can't update faster than ~28 microseconds, so no need to loop faster than that
-		// and if we loop *too* fast we'll end up blocking up the control channels, so slightly slower is better
-		time.Sleep(time.Duration(30 * time.Microsecond))
+		time.Sleep(time.Duration(10 * time.Millisecond))
 	}
 }
 
 func weaponControl() {
+	log("weapon control starting")
 	weaponFireTime := time.Time{}
 	// can do Pressure Sensor averaging and auto-calibration here as well
 	// calibrate pressure sensor
@@ -147,8 +137,9 @@ func weaponControl() {
 	}
 	calibrated /= 10
 
+	//log("entering weapon mainloop")
 	for {
-		time.Sleep(time.Duration(10) * time.Millisecond)
+		time.Sleep(time.Duration(10 * time.Millisecond))
 		// if in manual or auto mode; otherwise weapon is disabled / off
 		mode := RCPPM.Channel(weaponModeChannel)
 		// when the receiver loses signal, this channel defaults to 0, so for safety reasons
@@ -156,6 +147,7 @@ func weaponControl() {
 		switch {
 		case mode < 0.5 && mode > -0.5:
 			continue
+			// return
 		case RCPPM.Channel(weaponFireChannel) > 0.5:
 			fallthrough
 		case uint32(PressureSensor.Get()) > calibrated*2:
@@ -163,6 +155,7 @@ func weaponControl() {
 		case WeaponSensor.Get() && mode < -0.5:
 			if time.Since(weaponFireTime) < time.Duration(500*time.Millisecond) {
 				continue
+				// return
 			}
 			println("BOOM!")
 			Weapon.High()
