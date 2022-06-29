@@ -4,28 +4,18 @@ import (
 	"fmt"
 	"machine"
 	"math"
-	"time"
-
 	"ppm"
-
-	"tinygo.org/x/drivers/lis2mdl"
+	"time"
 )
 
 // Pinsssss
 const (
-	ESC1 = machine.D13
-	ESC2 = machine.D12
-	ESC3 = machine.D11
-	ESC4 = machine.D10
+	weaponPin = machine.GPIO27
+	RC        = machine.GPIO5
+)
 
-	WeaponSensor = machine.D12
-	Weapon       = machine.D7
-
-	PressureSensorPin = machine.A0
-
-	RC = machine.D9
-
-	// what each RC channel is for
+// RC Channels
+const (
 	weaponModeChannel = 4
 	weaponFireChannel = 5
 	xAxisChannel      = 0
@@ -34,138 +24,133 @@ const (
 	driveModeChannel  = 6
 )
 
-var (
-	PressureSensor machine.ADC
-	compass        lis2mdl.Device
-	heading        float64
-	RCPPM          *ppm.PPM
+type weaponState int
+
+const (
+	weaponReady weaponState = iota
+	weaponFiring
+	weaponCharging
 )
 
-func log(msg string) {
-	println(fmt.Sprintf("[%d] %s", time.Now().UnixNano(), msg))
+var (
+	motor [4]*StepperMotor
+	RCPPM *ppm.PPM
+)
+
+type weaponControl struct {
+	pin       machine.Pin
+	timestamp time.Time
+	state     weaponState
+}
+
+var weapon = &weaponControl{}
+
+// setup stepper motor control
+func initMotors() {
+	motor[0] = NewStepperMotor(machine.GPIO25, machine.GPIO15)
+	motor[1] = NewStepperMotor(machine.GPIO16, machine.GPIO17)
+	motor[2] = NewStepperMotor(machine.GPIO18, machine.GPIO19)
+	motor[3] = NewStepperMotor(machine.GPIO20, machine.GPIO21)
+
+	for i := range motor {
+		motor[i].InitMotor()
+	}
+}
+
+// setup reading from RC receiver
+func initRC() {
+	RCPPM = ppm.New(RC)
+	RCPPM.Start()
+}
+
+func initIMU() {
+
+}
+
+func waitHere() {
+	fmt.Println("waitHere")
+	for {
+		time.Sleep(time.Hour)
+	}
+}
+
+func (w *weaponControl) init() {
+	weapon.pin = weaponPin
+	weapon.pin.Configure(machine.PinConfig{Mode: machine.PinOutput})
+
+	// Use trinary shaping for both wepaon mode and fire button this ensures we get
+	// a -1, 0, or 1 from the RCPPM.Channel() call
+	RCPPM.Channels[weaponModeChannel].Shaping = ppm.Trinary
+	RCPPM.Channels[weaponFireChannel].Shaping = ppm.Trinary
+}
+
+func init() {
+	machine.UART0.Configure(machine.UARTConfig{
+		TX:       machine.GPIO0,
+		RX:       machine.GPIO1,
+		BaudRate: 115200,
+	})
+
+	machine.GPIO26.Configure(machine.PinConfig{Mode: machine.PinOutput})
+	machine.LED.Configure(machine.PinConfig{Mode: machine.PinOutput})
 }
 
 func main() {
-	// we boot too fast to catch start up log messages, so sleep a couple seconds
-	// to get the UART0 / usb connection up
-	time.Sleep(time.Duration(2 * time.Second))
-	log("omnivore start")
-
-	// Need ADC to read pressure sensor voltage
-	machine.InitADC()
-	PressureSensorPin.Configure(machine.PinConfig{Mode: machine.PinAnalog})
-	PressureSensor = machine.ADC{PressureSensorPin}
-	PressureSensor.Configure(machine.ADCConfig{})
-	log("ADC configured")
-
-	// Setup weapon sensor to use interrupt
-	WeaponSensor.Configure(machine.PinConfig{Mode: machine.PinInputPullup})
-	//WeaponSensor.SetInterrupt(machine.PinFalling, fireWeapon)
-
-	// setup weapon firing pin
-	Weapon.Configure(machine.PinConfig{Mode: machine.PinOutput})
-
-	// setup reading from RC receiver
-	RCPPM = ppm.New(RC)
-	RCPPM.Start()
-	// setup compass
-	// set up i2c first
-	machine.I2C0.Configure(machine.I2CConfig{})
-	// instantiate lis2mdl
-	compass = lis2mdl.New(machine.I2C0)
-	compass.Configure(lis2mdl.Configuration{})
-	log("compass and rc/ppm configured")
-
-	// start pwm for motors
-	TCC0 := machine.TCC0
-	var pwmChan [4]uint8
-	for i, pin := range [4]machine.Pin{ESC1, ESC2, ESC3, ESC4} {
-		var err error
-		pwmChan[i], err = TCC0.Channel(pin)
-		if err != nil {
-			log("error configuring pwm channel: " + err.Error())
-		}
-		err = TCC0.Configure(machine.PWMConfig{Period: uint64(20 * time.Millisecond)})
-		if err != nil {
-			log("error configuring TCC0 PWM: " + err.Error())
-		}
-		TCC0.Set(pwmChan[i], TCC0.Top()/13)
-	}
-	log("pwm/esc started")
-
-	go updateHeading()
-	go weaponControl()
+	initRC()
+	//initIMU()
+	initMotors()
+	weapon.init()
 
 	for {
-		var rotation float64
-		if RCPPM.Channel(driveModeChannel) > 0.6 && compass.Connected() {
-			// rotation = getHeading() / -180
-			rotation = heading / 180
-			rotation *= math.Abs(rotation)
-			if math.Abs(rotation) < 0.05 {
-				rotation = 0
-			}
-		}
-		// manual rotation control works regardless of auto-drive switch
-		if manualRot := RCPPM.Channel(rotAxisChannel); manualRot != 0 {
-			rotation = manualRot
-		}
-
-		m := sineDrive(RCPPM.Channel(xAxisChannel), RCPPM.Channel(yAxisChannel), rotation)
-
-		print(fmt.Sprintf("x: %+1.2f y: %+1.2f r: %+1.2f; m0: %+1.2f m1: %+1.2f m2: %+1.2f m3: %+1.2f\r", RCPPM.Channel(0), RCPPM.Channel(1), rotation, m[0], m[1], m[2], m[3]))
-
-		// weaponControl()
-
-		for i := range m {
-			divisor := math.Round(40 / (m[i] + 3))
-			TCC0.Set(pwmChan[i], TCC0.Top()/uint32(divisor))
-		}
-
-		time.Sleep(time.Duration(10 * time.Millisecond))
+		weapon.inputLoop()
+		motorControl()
+		time.Sleep(time.Duration(100 * time.Microsecond))
 	}
 }
 
-func weaponControl() {
-	log("weapon control starting")
-	weaponFireTime := time.Time{}
-	// can do Pressure Sensor averaging and auto-calibration here as well
-	// calibrate pressure sensor
-	var calibrated uint32
-	for i := 0; i < 10; i++ {
-		calibrated += uint32(PressureSensor.Get())
-	}
-	calibrated /= 10
+func motorControl() {
+	m := sineDrive(RCPPM.Channel(xAxisChannel), RCPPM.Channel(yAxisChannel), RCPPM.Channel(rotAxisChannel))
+	fmt.Printf("x: %+1.2f y: %+1.2f r: %+1.2f; m0: %+1.2f m1: %+1.2f m2: %+1.2f m3: %+1.2f\r\n", RCPPM.Channel(0), RCPPM.Channel(1), RCPPM.Channel(rotAxisChannel), m[0], m[1], m[2], m[3])
+	motor[0].Set(m[0])
+	motor[1].Set(m[1])
+	motor[2].Set(m[2])
+	motor[3].Set(m[3])
+}
 
-	//log("entering weapon mainloop")
-	for {
-		time.Sleep(time.Duration(10 * time.Millisecond))
-		// if in manual or auto mode; otherwise weapon is disabled / off
-		mode := RCPPM.Channel(weaponModeChannel)
-		// when the receiver loses signal, this channel defaults to 0, so for safety reasons
-		// we use 0 to mean "off"
-		switch {
-		case mode < 0.5 && mode > -0.5:
-			continue
-			// return
-		case RCPPM.Channel(weaponFireChannel) > 0.5:
-			fallthrough
-		case uint32(PressureSensor.Get()) > calibrated*2:
-			fallthrough
-		case WeaponSensor.Get() && mode < -0.5:
-			if time.Since(weaponFireTime) < time.Duration(500*time.Millisecond) {
-				continue
-				// return
-			}
-			println("BOOM!")
-			Weapon.High()
-			time.Sleep(time.Duration(200 * time.Millisecond))
-			Weapon.Low()
-			weaponFireTime = time.Now()
+func (w *weaponControl) SetState(state weaponState) {
+	w.state = state
+	w.timestamp = time.Now()
+}
+
+func (w *weaponControl) inputLoop() {
+	if RCPPM.Channel(weaponModeChannel) == 0 {
+		return
+	}
+
+	switch w.state {
+	case weaponReady:
+		if RCPPM.Channel(weaponFireChannel) == 1 || (RCPPM.Channel(weaponModeChannel) == 1 && false) {
+			w.pin.High()
+			machine.GPIO26.High()
+			w.SetState(weaponFiring)
+
 		}
+	case weaponFiring:
+		if time.Since(w.timestamp) > 240*time.Millisecond {
+			w.pin.Low()
+			machine.GPIO26.Low()
+			w.SetState(weaponCharging)
+		}
+	}
+
+	if time.Since(w.timestamp) > 2*time.Second {
+		w.SetState(weaponReady)
 	}
 }
 
+// a generic version of this would be more useful, but surely the hard-coded 4 motor
+// version is faster. Genuinely don't remember how this math works, but I think it
+// does work so 🤷
 // given x, y, and theta, determine how much to move 4 motors (wheels)
 /*
 		 ^
@@ -199,26 +184,6 @@ func sineDrive(x, y, rotation float64) (out [4]float64) {
 
 	//print(fmt.Sprintf("dV: %+1.3f dTheta: %+1.3f %+v\r", dV, dTheta, out))
 	return
-}
-
-func getHeading() float64 {
-	x, y, _ := compass.ReadMagneticField()
-	xf, yf := float64(x)*0.15, float64(y)*0.15
-	// if we swap x and y, we basically get what we expect, 0
-	// means we're facing north on the y axis
-	return (math.Atan2(yf, xf) * 180) / math.Pi
-}
-
-func updateHeading() {
-	for {
-		x, y, _ := compass.ReadMagneticField()
-		xf, yf := float64(x)*0.15, float64(y)*0.15
-		newHeading := (math.Atan2(xf, yf) * 180) / math.Pi
-
-		heading = angleAvg(heading, angleAvg(heading, newHeading))
-
-		time.Sleep(15 * time.Millisecond)
-	}
 }
 
 func angleAvg(a, b float64) float64 {

@@ -36,20 +36,18 @@ const (
 )
 
 type PPM struct {
-	channels       [16]channel
+	Channels       [16]Channel
 	pin            machine.Pin
 	currentChannel int
 	lastChange     time.Time
 }
 
-type channel struct {
-	deadZoneThreshold float64
+type Channel struct {
+	DeadZoneThreshold float64
 	minMeasured       time.Duration
 	maxMeasured       time.Duration
-	actual            time.Duration
-	emaWindow         float64
-	value             float64
-	shaping           Shaping
+	Value             time.Duration
+	Shaping           Shaping
 }
 
 func New(pin machine.Pin) *PPM {
@@ -58,13 +56,12 @@ func New(pin machine.Pin) *PPM {
 		pin: pin,
 	}
 	// setup defaults for the channels
-	for i := range p.channels {
-		p.channels[i].value = 0
-		p.channels[i].minMeasured = (msMidpoint - halfRange)
-		p.channels[i].maxMeasured = (msMidpoint + halfRange)
-		p.channels[i].deadZoneThreshold = defaultDeadZoneThreshold
-		p.channels[i].emaWindow = defaultEMAWindow
-		p.channels[i].shaping = Linear
+	for i := range p.Channels {
+		p.Channels[i].Value = 0
+		p.Channels[i].minMeasured = (msMidpoint - halfRange)
+		p.Channels[i].maxMeasured = (msMidpoint + halfRange)
+		p.Channels[i].DeadZoneThreshold = defaultDeadZoneThreshold
+		p.Channels[i].Shaping = Linear
 	}
 	return p
 }
@@ -81,49 +78,30 @@ func (p *PPM) Start() {
 		}
 
 		// shouldn't happen, but if we somehow found ourselves in this situation, do not modify any values
-		if p.currentChannel > len(p.channels)-1 {
+		if p.currentChannel > len(p.Channels)-1 {
 			return
 		}
 
+		// We could enable auto-scaling, but my particlar RC TX/RX seems *very* stable
 		//setMinMax(&(p.CurrentCh().minMeasured), &(p.CurrentCh().maxMeasured), timeDiff)
 
-		p.CurrentCh().actual = timeDiff
-		//p.CurrentCh().pushValue(timeDiff)
-		// magic constants just fucking work better, okay?!
-		p.CurrentCh().value = (float64(timeDiff)*2 - 3000000) / 1000000
+		// just save the value; we can do that slow soft float work elsewhere
+		p.Channels[p.currentChannel].Value = timeDiff
 		p.currentChannel++
 	})
-
 }
 
-func (p *PPM) SetDeadZoneThreshold(ch int, threshold float64) {
-	p.channels[ch].deadZoneThreshold = threshold
-}
-
-func (p *PPM) SetShaping(ch int, shape Shaping) {
-	p.channels[ch].shaping = shape
-}
-
-func (p *PPM) SetWindow(ch int, window float64) {
-	p.channels[ch].emaWindow = window
-}
-
-func (p *PPM) Channels() channel {
-}
-
-func (p *PPM) Actual(ch int) int64 {
-	return p.channels[ch].actual.Microseconds() - 1500
+// PulseDuration returns the actual time for the given channel in nanoseconds of the PPM pulse
+func (p *PPM) PulseDuration(ch int) time.Duration {
+	return p.Channels[ch].Value
 }
 
 func (p *PPM) Channel(ch int) float64 {
-	// for SOME FUCKING REASON trying to do the float calculation IN the interrupt
-	// breaks shit. Maybe because floating point math is hard? Acutally more like, because
-	// with TinyGo, floating point math is soft. Get it? because the FPU doesn't work?
-	scaled := (float64(p.channels[ch].actual.Microseconds())*2 - 3000) / 1000
-	if math.Abs(scaled) < p.channels[ch].deadZoneThreshold {
+	scaled := (float64(p.Channels[ch].Value)*2 - 3000000) / 1000000
+	if math.Abs(scaled) < p.Channels[ch].DeadZoneThreshold {
 		return 0
 	}
-	switch p.channels[ch].shaping {
+	switch p.Channels[ch].Shaping {
 	case Trinary:
 		if scaled < -0.33 {
 			return -1
@@ -146,53 +124,14 @@ func (p *PPM) Channel(ch int) float64 {
 	}
 	// Default / Linear
 	return scaled
-
-	/*
-		if math.Abs(p.channels[ch].value) < p.channels[ch].deadZoneThreshold {
-			return 0
-		}
-		//return p.channels[ch].value
-		switch p.channels[ch].shaping {
-		case Trinary:
-			if p.channels[ch].value < -0.33 {
-				return -1
-			}
-			if p.channels[ch].value > 0.33 {
-				return 1
-			}
-			return 0
-		case Square:
-			if p.channels[ch].value > 0 {
-				return p.channels[ch].value * p.channels[ch].value
-			}
-			return -p.channels[ch].value * p.channels[ch].value
-		case Logarithmic:
-			if p.channels[ch].value > 0 {
-				return math.Log(20*p.channels[ch].value+1) / math.Log(21)
-			}
-			return -math.Log(20*-p.channels[ch].value+1) / math.Log(21)
-
-		}
-		// Default / Linear
-		return p.channels[ch].value
-	*/
 }
 
 func (p *PPM) Stop() {
-	// p.pin.SetInterrupt(0, nil)
+	p.pin.SetInterrupt(0, nil)
 }
 
-func (p *PPM) CurrentCh() *channel {
-	return &p.channels[p.currentChannel]
-}
-
-func (c *channel) pushValue(v time.Duration) {
-	// disable EMA for now because nothing's working and this is just confusing me
-	c.value = float64(v*2-c.maxMeasured-c.minMeasured) / float64(c.maxMeasured-c.minMeasured)
-	return
-	c.value = EMA(c.emaWindow,
-		c.value,
-		float64(v*2-c.maxMeasured-c.minMeasured)/float64(c.maxMeasured-c.minMeasured))
+func (p *PPM) CurrentCh() *Channel {
+	return &p.Channels[p.currentChannel]
 }
 
 func EMA(window, prev, cur float64) float64 {
