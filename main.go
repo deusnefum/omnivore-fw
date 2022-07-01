@@ -45,6 +45,15 @@ type weaponControl struct {
 
 var weapon = &weaponControl{}
 
+type heartbeat time.Time
+
+func (hb *heartbeat) beat() {
+	if time.Since(time.Time(*hb)) > time.Second {
+		machine.LED.Set(!machine.LED.Get())
+		*hb = heartbeat(time.Now())
+	}
+}
+
 // setup stepper motor control
 func initMotors() {
 	motor[0] = NewStepperMotor(machine.GPIO25, machine.GPIO15)
@@ -61,6 +70,10 @@ func initMotors() {
 func initRC() {
 	RCPPM = ppm.New(RC)
 	RCPPM.Start()
+
+	RCPPM.Channels[xAxisChannel].Shaping = ppm.Logarithmic
+	RCPPM.Channels[yAxisChannel].Shaping = ppm.Logarithmic
+	RCPPM.Channels[rotAxisChannel].Shaping = ppm.Logarithmic
 }
 
 func initIMU() {
@@ -96,12 +109,14 @@ func init() {
 }
 
 func main() {
+	hb := new(heartbeat)
 	initRC()
 	//initIMU()
 	initMotors()
 	weapon.init()
 
 	for {
+		hb.beat() // this is an unfortunately useful diagnostic tool
 		weapon.inputLoop()
 		motorControl()
 		time.Sleep(time.Duration(100 * time.Microsecond))
@@ -109,8 +124,9 @@ func main() {
 }
 
 func motorControl() {
+	// implement the PID loop from the IMU somehow...
 	m := sineDrive(RCPPM.Channel(xAxisChannel), RCPPM.Channel(yAxisChannel), RCPPM.Channel(rotAxisChannel))
-	fmt.Printf("x: %+1.2f y: %+1.2f r: %+1.2f; m0: %+1.2f m1: %+1.2f m2: %+1.2f m3: %+1.2f\r\n", RCPPM.Channel(0), RCPPM.Channel(1), RCPPM.Channel(rotAxisChannel), m[0], m[1], m[2], m[3])
+	// fmt.Printf("x: %+1.2f y: %+1.2f r: %+1.2f; m0: %+1.2f m1: %+1.2f m2: %+1.2f m3: %+1.2f\r\n", RCPPM.Channel(0), RCPPM.Channel(1), RCPPM.Channel(rotAxisChannel), m[0], m[1], m[2], m[3])
 	motor[0].Set(m[0])
 	motor[1].Set(m[1])
 	motor[2].Set(m[2])
@@ -123,17 +139,17 @@ func (w *weaponControl) SetState(state weaponState) {
 }
 
 func (w *weaponControl) inputLoop() {
-	if RCPPM.Channel(weaponModeChannel) == 0 {
+	mode := RCPPM.Channel(weaponModeChannel)
+	if mode == 0 {
 		return
 	}
 
 	switch w.state {
 	case weaponReady:
-		if RCPPM.Channel(weaponFireChannel) == 1 || (RCPPM.Channel(weaponModeChannel) == 1 && false) {
+		if RCPPM.Channel(weaponFireChannel) == 1 || (mode == 1 && false) {
 			w.pin.High()
 			machine.GPIO26.High()
 			w.SetState(weaponFiring)
-
 		}
 	case weaponFiring:
 		if time.Since(w.timestamp) > 240*time.Millisecond {
