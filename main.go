@@ -56,10 +56,10 @@ func (hb *heartbeat) beat() {
 
 // setup stepper motor control
 func initMotors() {
-	motor[0] = NewStepperMotor(machine.GPIO25, machine.GPIO15)
-	motor[1] = NewStepperMotor(machine.GPIO16, machine.GPIO17)
-	motor[2] = NewStepperMotor(machine.GPIO18, machine.GPIO19)
-	motor[3] = NewStepperMotor(machine.GPIO20, machine.GPIO21)
+	motor[0] = NewStepperMotor(machine.GPIO15)
+	motor[1] = NewStepperMotor(machine.GPIO17)
+	motor[2] = NewStepperMotor(machine.GPIO19)
+	motor[3] = NewStepperMotor(machine.GPIO21)
 
 	for i := range motor {
 		motor[i].InitMotor()
@@ -71,9 +71,9 @@ func initRC() {
 	RCPPM = ppm.New(RC)
 	RCPPM.Start()
 
-	RCPPM.Channels[xAxisChannel].Shaping = ppm.Logarithmic
-	RCPPM.Channels[yAxisChannel].Shaping = ppm.Logarithmic
-	RCPPM.Channels[rotAxisChannel].Shaping = ppm.Logarithmic
+	RCPPM.Channels[xAxisChannel].Shaping = ppm.Square
+	RCPPM.Channels[yAxisChannel].Shaping = ppm.Square
+	RCPPM.Channels[rotAxisChannel].Shaping = ppm.Square
 }
 
 func initIMU() {
